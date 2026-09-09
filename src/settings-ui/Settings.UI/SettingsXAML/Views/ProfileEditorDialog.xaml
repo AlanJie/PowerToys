@@ -128,7 +128,7 @@
                                             MinWidth="{StaticResource SettingActionControlMinWidth}"
                                             VerticalAlignment="Center"
                                             DisplayMemberPath="DisplayName"
-                                            ItemsSource="{x:Bind Monitor.ColorPresetsForDisplay, Mode=OneWay}"
+                                            ItemsSource="{x:Bind ColorPresetsForDisplay, Mode=OneWay}"
                                             SelectedValue="{x:Bind ColorTemperature, Mode=TwoWay}"
                                             SelectedValuePath="VcpValue" />
                                     </tkcontrols:SettingsCard>

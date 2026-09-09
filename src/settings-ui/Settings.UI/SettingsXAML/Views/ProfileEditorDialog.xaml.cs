@@ -31,6 +31,7 @@ namespace Microsoft.PowerToys.Settings.UI.Views
         {
             this.InitializeComponent();
             ViewModel = new ProfileEditorViewModel(availableMonitors, defaultName, profileId);
+            Closed += ProfileEditorDialog_Closed;
 
             // Set localized strings for ContentDialog
             var resourceLoader = ResourceLoaderInstance.ResourceLoader;
@@ -50,6 +51,11 @@ namespace Microsoft.PowerToys.Settings.UI.Views
         private void ContentDialog_CloseButtonClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
         {
             ResultProfile = null;
+        }
+
+        private void ProfileEditorDialog_Closed(ContentDialog sender, ContentDialogClosedEventArgs args)
+        {
+            ViewModel.Dispose();
         }
 
         /// <summary>

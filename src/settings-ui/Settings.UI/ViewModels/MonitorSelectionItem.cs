@@ -4,28 +4,43 @@
 
 #nullable enable
 
+using System;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using Microsoft.PowerToys.Settings.UI.Library;
+using PowerDisplay.Models;
 
 namespace Microsoft.PowerToys.Settings.UI.ViewModels
 {
     /// <summary>
     /// ViewModel for monitor selection in profile editor
     /// </summary>
-    public class MonitorSelectionItem : INotifyPropertyChanged
+    public class MonitorSelectionItem : INotifyPropertyChanged, IDisposable
     {
         private bool _isSelected;
         private int _brightness = 100;
         private int _contrast = 50;
         private int _volume = 50;
-        private int _colorTemperature = 6500;
+        private int? _colorTemperature;
         private bool _includeBrightness;
         private bool _includeContrast;
         private bool _includeVolume;
         private bool _includeColorTemperature;
 
-        public required MonitorInfo Monitor { get; set; }
+        public MonitorSelectionItem(MonitorInfo monitor)
+        {
+            ArgumentNullException.ThrowIfNull(monitor);
+            Monitor = monitor;
+            Monitor.PropertyChanged += OnMonitorPropertyChanged;
+        }
+
+        public MonitorInfo Monitor { get; }
+
+        public ObservableCollection<ColorPresetItem> ColorPresetsForDisplay => Monitor.ColorPresetsForDisplay;
+
+        public bool HasValidColorTemperature => SupportsColorTemperature && IsColorTemperatureAvailable(_colorTemperature);
 
         public bool SuppressAutoSelection { get; set; }
 
@@ -93,16 +108,20 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             }
         }
 
-        public int ColorTemperature
+        public int? ColorTemperature
         {
             get => _colorTemperature;
             set
             {
-                if (_colorTemperature != value)
+                // A filtered current/profile value and a cleared ComboBox selection both
+                // require the user to choose an available preset before including it.
+                var selection = IsColorTemperatureAvailable(value) ? value : null;
+                if (_colorTemperature != selection)
                 {
-                    _colorTemperature = value;
+                    _colorTemperature = selection;
                     OnPropertyChanged();
-                    if (!SuppressAutoSelection)
+                    OnPropertyChanged(nameof(HasValidColorTemperature));
+                    if (!SuppressAutoSelection && selection.HasValue)
                     {
                         IncludeColorTemperature = true;
                     }
@@ -169,6 +188,51 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Monitor.PropertyChanged -= OnMonitorPropertyChanged;
+            }
+        }
+
+        private bool IsColorTemperatureAvailable(int? value)
+        {
+            return value.HasValue && ColorPresetsForDisplay.Any(preset => preset.VcpValue == value.Value);
+        }
+
+        private void OnMonitorPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != nameof(MonitorInfo.ColorPresetsForDisplay))
+            {
+                return;
+            }
+
+            var selection = _colorTemperature;
+            var wasSuppressed = SuppressAutoSelection;
+            SuppressAutoSelection = true;
+            try
+            {
+                // Replacing ItemsSource can synchronously clear SelectedValue. Forward
+                // the list change here so that neither that clear nor restoring a valid
+                // selection is treated as the user opting into color temperature.
+                OnPropertyChanged(nameof(ColorPresetsForDisplay));
+                ColorTemperature = selection;
+                OnPropertyChanged(nameof(ColorTemperature));
+                OnPropertyChanged(nameof(HasValidColorTemperature));
+            }
+            finally
+            {
+                SuppressAutoSelection = wasSuppressed;
+            }
+        }
 
         protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {

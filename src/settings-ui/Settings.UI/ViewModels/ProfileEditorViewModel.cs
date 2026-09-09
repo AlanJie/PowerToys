@@ -4,6 +4,7 @@
 
 #nullable enable
 
+using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
@@ -16,11 +17,11 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
     /// <summary>
     /// ViewModel for Profile Editor Dialog
     /// </summary>
-    public class ProfileEditorViewModel : INotifyPropertyChanged
+    public class ProfileEditorViewModel : INotifyPropertyChanged, IDisposable
     {
         private readonly int _profileId;
+        private readonly ObservableCollection<MonitorSelectionItem> _monitors;
         private string _profileName = string.Empty;
-        private ObservableCollection<MonitorSelectionItem> _monitors;
 
         public ProfileEditorViewModel(
             ObservableCollection<MonitorInfo> availableMonitors,
@@ -41,10 +42,9 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             // Initialize monitor selection items
             foreach (var monitor in availableMonitors)
             {
-                var item = new MonitorSelectionItem
+                var item = new MonitorSelectionItem(monitor)
                 {
                     SuppressAutoSelection = true,
-                    Monitor = monitor,
                     IsSelected = false,
                     Brightness = monitor.CurrentBrightness,
                     Contrast = 50, // Default value (MonitorInfo doesn't store contrast)
@@ -75,24 +75,15 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             }
         }
 
-        public ObservableCollection<MonitorSelectionItem> Monitors
-        {
-            get => _monitors;
-            set
-            {
-                if (_monitors != value)
-                {
-                    _monitors = value;
-                    OnPropertyChanged();
-                }
-            }
-        }
+        public ObservableCollection<MonitorSelectionItem> Monitors => _monitors;
 
         public bool HasSelectedMonitors => _monitors?.Any(m => m.IsSelected) ?? false;
 
         public bool HasValidSettings => _monitors != null &&
             _monitors.Any(m => m.IsSelected) &&
-            _monitors.Where(m => m.IsSelected).All(m => m.IncludeBrightness || m.IncludeContrast || m.IncludeVolume || m.IncludeColorTemperature);
+            _monitors.Where(m => m.IsSelected).All(m =>
+                (m.IncludeBrightness || m.IncludeContrast || m.IncludeVolume || m.IncludeColorTemperature) &&
+                (!m.IncludeColorTemperature || !m.SupportsColorTemperature || m.HasValidColorTemperature));
 
         public bool CanSave => !string.IsNullOrWhiteSpace(_profileName) && HasSelectedMonitors && HasValidSettings;
 
@@ -103,7 +94,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 .Select(m => new ProfileMonitorSetting(
                     m.Monitor.Id, // Monitor Id (unique identifier)
                     m.IncludeBrightness ? (int?)m.Brightness : null,
-                    m.IncludeColorTemperature && m.SupportsColorTemperature ? (int?)m.ColorTemperature : null,
+                    m.IncludeColorTemperature && m.HasValidColorTemperature ? m.ColorTemperature : null,
                     m.IncludeContrast && m.SupportsContrast ? (int?)m.Contrast : null,
                     m.IncludeVolume && m.SupportsVolume ? (int?)m.Volume : null))
                 .ToList();
@@ -112,6 +103,24 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                foreach (var monitor in _monitors)
+                {
+                    monitor.PropertyChanged -= OnMonitorItemPropertyChanged;
+                    monitor.Dispose();
+                }
+            }
+        }
 
         protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
@@ -135,7 +144,8 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 e.PropertyName == nameof(MonitorSelectionItem.IncludeBrightness) ||
                 e.PropertyName == nameof(MonitorSelectionItem.IncludeContrast) ||
                 e.PropertyName == nameof(MonitorSelectionItem.IncludeVolume) ||
-                e.PropertyName == nameof(MonitorSelectionItem.IncludeColorTemperature))
+                e.PropertyName == nameof(MonitorSelectionItem.IncludeColorTemperature) ||
+                e.PropertyName == nameof(MonitorSelectionItem.HasValidColorTemperature))
             {
                 OnPropertyChanged(nameof(CanSave));
                 OnPropertyChanged(nameof(HasValidSettings));
