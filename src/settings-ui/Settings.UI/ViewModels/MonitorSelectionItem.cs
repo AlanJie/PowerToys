@@ -210,6 +210,13 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
 
         private void OnMonitorPropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
+            if (e.PropertyName == nameof(MonitorInfo.SupportsContrast) ||
+                e.PropertyName == nameof(MonitorInfo.SupportsVolume))
+            {
+                OnPropertyChanged(e.PropertyName);
+                return;
+            }
+
             if (e.PropertyName != nameof(MonitorInfo.ColorPresetsForDisplay))
             {
                 return;

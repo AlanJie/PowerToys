@@ -82,7 +82,10 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
         public bool HasValidSettings => _monitors != null &&
             _monitors.Any(m => m.IsSelected) &&
             _monitors.Where(m => m.IsSelected).All(m =>
-                (m.IncludeBrightness || m.IncludeContrast || m.IncludeVolume || m.IncludeColorTemperature) &&
+                (m.IncludeBrightness ||
+                    (m.IncludeContrast && m.SupportsContrast) ||
+                    (m.IncludeVolume && m.SupportsVolume) ||
+                    (m.IncludeColorTemperature && m.HasValidColorTemperature)) &&
                 (!m.IncludeColorTemperature || !m.SupportsColorTemperature || m.HasValidColorTemperature));
 
         public bool CanSave => !string.IsNullOrWhiteSpace(_profileName) && HasSelectedMonitors && HasValidSettings;
@@ -100,6 +103,52 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 .ToList();
 
             return new PowerDisplayProfile(_profileName, settings) { Id = _profileId };
+        }
+
+        /// <summary>
+        /// Pre-fill a new editor with the existing profile's monitor settings.
+        /// </summary>
+        public void PreFillProfile(PowerDisplayProfile profile)
+        {
+            if (profile == null)
+            {
+                return;
+            }
+
+            ProfileName = profile.Name;
+
+            foreach (var monitorSetting in profile.MonitorSettings)
+            {
+                var monitorItem = _monitors.FirstOrDefault(m => MonitorIdComparer.Equal(m.Monitor.Id, monitorSetting.MonitorId));
+                if (monitorItem != null)
+                {
+                    monitorItem.IsSelected = true;
+
+                    if (monitorSetting.Brightness.HasValue)
+                    {
+                        monitorItem.IncludeBrightness = true;
+                        monitorItem.Brightness = monitorSetting.Brightness.Value;
+                    }
+
+                    if (monitorSetting.ColorTemperatureVcp.HasValue)
+                    {
+                        monitorItem.IncludeColorTemperature = true;
+                        monitorItem.ColorTemperature = monitorSetting.ColorTemperatureVcp.Value;
+                    }
+
+                    if (monitorSetting.Contrast.HasValue)
+                    {
+                        monitorItem.IncludeContrast = true;
+                        monitorItem.Contrast = monitorSetting.Contrast.Value;
+                    }
+
+                    if (monitorSetting.Volume.HasValue)
+                    {
+                        monitorItem.IncludeVolume = true;
+                        monitorItem.Volume = monitorSetting.Volume.Value;
+                    }
+                }
+            }
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -145,6 +194,8 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 e.PropertyName == nameof(MonitorSelectionItem.IncludeContrast) ||
                 e.PropertyName == nameof(MonitorSelectionItem.IncludeVolume) ||
                 e.PropertyName == nameof(MonitorSelectionItem.IncludeColorTemperature) ||
+                e.PropertyName == nameof(MonitorSelectionItem.SupportsContrast) ||
+                e.PropertyName == nameof(MonitorSelectionItem.SupportsVolume) ||
                 e.PropertyName == nameof(MonitorSelectionItem.HasValidColorTemperature))
             {
                 OnPropertyChanged(nameof(CanSave));
