@@ -5,6 +5,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
@@ -22,6 +23,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
         private readonly int _profileId;
         private readonly ObservableCollection<MonitorSelectionItem> _monitors;
         private string _profileName = string.Empty;
+        private PowerDisplayProfile? _originalProfile;
 
         public ProfileEditorViewModel(
             ObservableCollection<MonitorInfo> availableMonitors,
@@ -77,32 +79,57 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
 
         public ObservableCollection<MonitorSelectionItem> Monitors => _monitors;
 
-        public bool HasSelectedMonitors => _monitors?.Any(m => m.IsSelected) ?? false;
+        public bool HasSelectedMonitors => _monitors.Any(m => m.IsSelected) || HasMissingProfileMonitors;
 
-        public bool HasValidSettings => _monitors != null &&
-            _monitors.Any(m => m.IsSelected) &&
-            _monitors.Where(m => m.IsSelected).All(m =>
-                (m.IncludeBrightness ||
-                    (m.IncludeContrast && m.SupportsContrast) ||
-                    (m.IncludeVolume && m.SupportsVolume) ||
-                    (m.IncludeColorTemperature && m.HasValidColorTemperature)) &&
-                (!m.IncludeColorTemperature || !m.SupportsColorTemperature || m.HasValidColorTemperature));
+        public bool HasValidSettings => HasSelectedMonitors &&
+            _monitors.Where(m => m.IsSelected).All(m => m.HasValidSettings);
+
+        public bool HasPreservedSettings => HasMissingProfileMonitors ||
+            _monitors.Any(m => m.IsSelected && m.HasPreservedSettings);
 
         public bool CanSave => !string.IsNullOrWhiteSpace(_profileName) && HasSelectedMonitors && HasValidSettings;
 
+        private bool HasMissingProfileMonitors => _originalProfile?.MonitorSettings.Any(setting =>
+            !_monitors.Any(m => MonitorIdComparer.Equal(m.Monitor.Id, setting.MonitorId))) ?? false;
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
         public PowerDisplayProfile CreateProfile()
         {
-            var settings = _monitors
-                .Where(m => m.IsSelected)
-                .Select(m => new ProfileMonitorSetting(
-                    m.Monitor.Id, // Monitor Id (unique identifier)
-                    m.IncludeBrightness ? (int?)m.Brightness : null,
-                    m.IncludeColorTemperature && m.HasValidColorTemperature ? m.ColorTemperature : null,
-                    m.IncludeContrast && m.SupportsContrast ? (int?)m.Contrast : null,
-                    m.IncludeVolume && m.SupportsVolume ? (int?)m.Volume : null))
-                .ToList();
+            var settings = new List<ProfileMonitorSetting>();
+            if (_originalProfile != null)
+            {
+                foreach (var original in _originalProfile.MonitorSettings)
+                {
+                    var item = _monitors.FirstOrDefault(m => MonitorIdComparer.Equal(m.Monitor.Id, original.MonitorId));
+                    if (item == null)
+                    {
+                        // Unavailable monitors have no editor controls. Keep their snapshots
+                        // until the user can explicitly change or remove them.
+                        settings.Add(CloneMonitorSetting(original));
+                    }
+                    else if (item.IsSelected)
+                    {
+                        settings.Add(item.CreateProfileSetting(original.MonitorId));
+                    }
+                }
+            }
 
-            return new PowerDisplayProfile(_profileName, settings) { Id = _profileId };
+            foreach (var item in _monitors.Where(m => m.IsSelected))
+            {
+                if (_originalProfile?.MonitorSettings.Any(setting => MonitorIdComparer.Equal(setting.MonitorId, item.Monitor.Id)) != true)
+                {
+                    settings.Add(item.CreateProfileSetting(item.Monitor.Id));
+                }
+            }
+
+            var profile = new PowerDisplayProfile(_profileName, settings) { Id = _originalProfile?.Id ?? _profileId };
+            if (_originalProfile != null)
+            {
+                profile.CreatedDate = _originalProfile.CreatedDate;
+            }
+
+            return profile;
         }
 
         /// <summary>
@@ -115,43 +142,24 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 return;
             }
 
+            _originalProfile = new PowerDisplayProfile(profile.Name, profile.MonitorSettings.Select(CloneMonitorSetting).ToList())
+            {
+                Id = profile.Id,
+                CreatedDate = profile.CreatedDate,
+                LastModified = profile.LastModified,
+            };
             ProfileName = profile.Name;
 
-            foreach (var monitorSetting in profile.MonitorSettings)
+            foreach (var item in _monitors)
             {
-                var monitorItem = _monitors.FirstOrDefault(m => MonitorIdComparer.Equal(m.Monitor.Id, monitorSetting.MonitorId));
-                if (monitorItem != null)
-                {
-                    monitorItem.IsSelected = true;
-
-                    if (monitorSetting.Brightness.HasValue)
-                    {
-                        monitorItem.IncludeBrightness = true;
-                        monitorItem.Brightness = monitorSetting.Brightness.Value;
-                    }
-
-                    if (monitorSetting.ColorTemperatureVcp.HasValue)
-                    {
-                        monitorItem.IncludeColorTemperature = true;
-                        monitorItem.ColorTemperature = monitorSetting.ColorTemperatureVcp.Value;
-                    }
-
-                    if (monitorSetting.Contrast.HasValue)
-                    {
-                        monitorItem.IncludeContrast = true;
-                        monitorItem.Contrast = monitorSetting.Contrast.Value;
-                    }
-
-                    if (monitorSetting.Volume.HasValue)
-                    {
-                        monitorItem.IncludeVolume = true;
-                        monitorItem.Volume = monitorSetting.Volume.Value;
-                    }
-                }
+                item.LoadProfileSetting(_originalProfile.MonitorSettings.FirstOrDefault(setting => MonitorIdComparer.Equal(item.Monitor.Id, setting.MonitorId)));
             }
-        }
 
-        public event PropertyChangedEventHandler? PropertyChanged;
+            OnPropertyChanged(nameof(HasSelectedMonitors));
+            OnPropertyChanged(nameof(HasValidSettings));
+            OnPropertyChanged(nameof(CanSave));
+            OnPropertyChanged(nameof(HasPreservedSettings));
+        }
 
         public void Dispose()
         {
@@ -176,6 +184,9 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
+        private static ProfileMonitorSetting CloneMonitorSetting(ProfileMonitorSetting setting)
+            => new(setting.MonitorId, setting.Brightness, setting.ColorTemperatureVcp, setting.Contrast, setting.Volume);
+
         /// <summary>
         /// Handle property changes from monitor selection items.
         /// Centralizes validation state updates to avoid duplication.
@@ -190,16 +201,16 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
 
             // Update validation state for relevant property changes
             if (e.PropertyName == nameof(MonitorSelectionItem.IsSelected) ||
-                e.PropertyName == nameof(MonitorSelectionItem.IncludeBrightness) ||
-                e.PropertyName == nameof(MonitorSelectionItem.IncludeContrast) ||
-                e.PropertyName == nameof(MonitorSelectionItem.IncludeVolume) ||
-                e.PropertyName == nameof(MonitorSelectionItem.IncludeColorTemperature) ||
-                e.PropertyName == nameof(MonitorSelectionItem.SupportsContrast) ||
-                e.PropertyName == nameof(MonitorSelectionItem.SupportsVolume) ||
-                e.PropertyName == nameof(MonitorSelectionItem.HasValidColorTemperature))
+                e.PropertyName == nameof(MonitorSelectionItem.HasValidSettings))
             {
                 OnPropertyChanged(nameof(CanSave));
                 OnPropertyChanged(nameof(HasValidSettings));
+            }
+
+            if (e.PropertyName == nameof(MonitorSelectionItem.IsSelected) ||
+                e.PropertyName == nameof(MonitorSelectionItem.HasPreservedSettings))
+            {
+                OnPropertyChanged(nameof(HasPreservedSettings));
             }
         }
     }
