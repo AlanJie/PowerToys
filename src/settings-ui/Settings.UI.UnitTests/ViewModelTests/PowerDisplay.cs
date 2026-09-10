@@ -2,12 +2,16 @@
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
 using Microsoft.PowerToys.Settings.UI.Library;
 using Microsoft.PowerToys.Settings.UI.UnitTests.BackwardsCompatibility;
 using Microsoft.PowerToys.Settings.UI.UnitTests.Mocks;
 using Microsoft.PowerToys.Settings.UI.ViewModels;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Moq;
 using PowerDisplay.Models;
 
 namespace ViewModelTests;
@@ -85,7 +89,140 @@ public class PowerDisplay
             nameof(PowerDisplayViewModel.MouseWheelControlModeIndex));
     }
 
+    [TestMethod]
+    public void DisabledVcpValues_ChangesSaveAndSendOnceWhileRefreshingPresets()
+    {
+        var monitor = CreateMonitor();
+        using var viewModel = CreateViewModel(out _, out var settingsUtils, out var ipcMessages, monitor);
+        Assert.AreEqual(2, monitor.ColorPresetsForDisplay.Count);
+
+        monitor.DisabledVcpValues = new List<VcpValueBlock>
+        {
+            new() { VcpCode = 0x14, Values = new() { 0x05 } },
+        };
+
+        settingsUtils.Verify(
+            utils => utils.SaveSettings(It.IsAny<string>(), PowerDisplaySettings.ModuleName, SettingsUtils.DefaultFileName),
+            Times.Once);
+        Assert.AreEqual(1, ipcMessages.Count);
+        var savedBlock = GetSavedSettings(settingsUtils).Properties.Monitors.Single().DisabledVcpValues.Single();
+        Assert.AreEqual((byte)0x14, savedBlock.VcpCode);
+        Assert.AreEqual(0x05, savedBlock.Values.Single());
+        Assert.AreEqual(0x08, monitor.ColorPresetsForDisplay.Single().VcpValue);
+    }
+
+    [TestMethod]
+    [DataRow(nameof(MonitorInfo.EnableContrast))]
+    [DataRow(nameof(MonitorInfo.EnableVolume))]
+    [DataRow(nameof(MonitorInfo.EnableInputSource))]
+    [DataRow(nameof(MonitorInfo.EnableRotation))]
+    [DataRow(nameof(MonitorInfo.EnableColorTemperature))]
+    [DataRow(nameof(MonitorInfo.EnablePowerState))]
+    [DataRow(nameof(MonitorInfo.IsHidden))]
+    public void MonitorUserPreference_ChangesSaveAndSendOnce(string propertyName)
+    {
+        var monitor = CreateMonitor();
+        using var viewModel = CreateViewModel(out _, out var settingsUtils, out var ipcMessages, monitor);
+        var property = typeof(MonitorInfo).GetProperty(propertyName);
+
+        property.SetValue(monitor, true);
+
+        settingsUtils.Verify(
+            utils => utils.SaveSettings(It.IsAny<string>(), PowerDisplaySettings.ModuleName, SettingsUtils.DefaultFileName),
+            Times.Once);
+        Assert.AreEqual(1, ipcMessages.Count);
+        Assert.IsTrue((bool)property.GetValue(GetSavedSettings(settingsUtils).Properties.Monitors.Single()));
+    }
+
+    [TestMethod]
+    public void MonitorRuntimeAndDerivedProperties_DoNotSaveOrSend()
+    {
+        var monitor = CreateMonitor();
+        using var viewModel = CreateViewModel(out _, out var settingsUtils, out var ipcMessages, monitor);
+
+        monitor.Name = "Updated monitor";
+        monitor.CurrentBrightness = 75;
+        monitor.ColorTemperatureVcp = 0x08;
+        monitor.SupportsColorTemperature = false;
+        monitor.CapabilitiesRaw = "(vcp(10))";
+        monitor.VcpCodesFormatted = new List<VcpCodeDisplayInfo>();
+
+        settingsUtils.Verify(
+            utils => utils.SaveSettings(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
+            Times.Never);
+        Assert.AreEqual(0, ipcMessages.Count);
+    }
+
+    [TestMethod]
+    public void ReloadMonitors_ChangedUserPreferencesDoNotSaveOrSend()
+    {
+        var monitor = CreateMonitor();
+        Action reloadMonitors = null;
+        using var viewModel = CreateViewModel(
+            out _,
+            out var settingsUtils,
+            out var ipcMessages,
+            monitor,
+            (_, callback) => reloadMonitors = callback);
+        var updatedSettings = new PowerDisplaySettings();
+        var updatedMonitor = CreateMonitor();
+        updatedMonitor.EnableColorTemperature = true;
+        updatedMonitor.DisabledVcpValues = new List<VcpValueBlock>
+        {
+            new() { VcpCode = 0x14, Values = new() { 0x05 } },
+        };
+        updatedSettings.Properties.Monitors.Add(updatedMonitor);
+        settingsUtils.Setup(utils => utils.GetSettingsOrDefault<PowerDisplaySettings>(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(updatedSettings);
+
+        reloadMonitors();
+
+        Assert.AreSame(monitor, viewModel.Monitors.Single());
+        Assert.IsTrue(monitor.EnableColorTemperature);
+        Assert.AreEqual(0x05, monitor.DisabledVcpValues.Single().Values.Single());
+        settingsUtils.Verify(
+            utils => utils.SaveSettings(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
+            Times.Never);
+        Assert.AreEqual(0, ipcMessages.Count);
+    }
+
+    private static MonitorInfo CreateMonitor()
+    {
+        return new MonitorInfo
+        {
+            Id = @"\\?\DISPLAY#TEST001#1",
+            SupportsColorTemperature = true,
+            ColorTemperatureVcp = 0x05,
+            VcpCodesFormatted = new List<VcpCodeDisplayInfo>
+            {
+                new()
+                {
+                    Code = "0x14",
+                    ValueList = new()
+                    {
+                        new() { Value = "0x05", Name = "6500 K" },
+                        new() { Value = "0x08", Name = "9300 K" },
+                    },
+                },
+            },
+        };
+    }
+
+    private static PowerDisplaySettings GetSavedSettings(Mock<SettingsUtils> settingsUtils)
+    {
+        var save = settingsUtils.Invocations.Single(invocation => invocation.Method.Name == nameof(SettingsUtils.SaveSettings));
+        return JsonSerializer.Deserialize((string)save.Arguments[0], SettingsSerializationContext.Default.PowerDisplaySettings);
+    }
+
     private static PowerDisplayViewModel CreateViewModel(out PowerDisplaySettings settings)
+        => CreateViewModel(out settings, out _, out _);
+
+    private static PowerDisplayViewModel CreateViewModel(
+        out PowerDisplaySettings settings,
+        out Mock<SettingsUtils> settingsUtils,
+        out List<string> ipcMessages,
+        MonitorInfo monitor = null,
+        Action<string, Action> waitForEventLoop = null)
     {
         var powerDisplaySettingsUtils =
             ISettingsUtilsMocks.GetStubSettingsUtils<PowerDisplaySettings>();
@@ -94,6 +231,14 @@ public class PowerDisplay
 
         settings = powerDisplaySettingsUtils.Object.GetSettingsOrDefault<PowerDisplaySettings>(
             PowerDisplaySettings.ModuleName);
+        if (monitor != null)
+        {
+            settings.Properties.Monitors.Add(monitor);
+        }
+
+        settingsUtils = powerDisplaySettingsUtils;
+        var messages = new List<string>();
+        ipcMessages = messages;
 
         return new PowerDisplayViewModel(
             powerDisplaySettingsUtils.Object,
@@ -101,7 +246,11 @@ public class PowerDisplay
                 generalSettingsUtils.Object),
             new BackCompatTestProperties.MockSettingsRepository<PowerDisplaySettings>(
                 powerDisplaySettingsUtils.Object),
-            _ => 0,
-            (_, _) => { });
+            message =>
+            {
+                messages.Add(message);
+                return 0;
+            },
+            waitForEventLoop ?? ((_, _) => { }));
     }
 }

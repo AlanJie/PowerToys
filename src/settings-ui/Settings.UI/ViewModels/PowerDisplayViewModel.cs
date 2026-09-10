@@ -590,25 +590,30 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 return;
             }
 
+            // Only these properties are edited by the Settings page. Runtime data and
+            // derived display properties must not save again after the update event:
+            // PowerDisplay may already be reading the file in response to that event.
+            if (e.PropertyName is not (nameof(MonitorInfo.EnableContrast) or
+                nameof(MonitorInfo.EnableVolume) or
+                nameof(MonitorInfo.EnableInputSource) or
+                nameof(MonitorInfo.EnableRotation) or
+                nameof(MonitorInfo.EnableColorTemperature) or
+                nameof(MonitorInfo.EnablePowerState) or
+                nameof(MonitorInfo.DisabledVcpValues) or
+                nameof(MonitorInfo.IsHidden)))
+            {
+                return;
+            }
+
             // MonitorInfo is a reference type shared between _monitors and
             // _settings.Properties.Monitors — the property change is already visible
             // in the persisted list, so just trigger save. Rebuilding the list from
             // _monitors here would silently drop legacy entries the filter hides.
             NotifySettingsChanged();
 
-            // For feature visibility properties, explicitly signal PowerDisplay to refresh
-            // This is needed because set_config() doesn't signal SettingsUpdatedEvent to avoid UI refresh issues
-            if (e.PropertyName == nameof(MonitorInfo.EnableContrast) ||
-                e.PropertyName == nameof(MonitorInfo.EnableVolume) ||
-                e.PropertyName == nameof(MonitorInfo.EnableInputSource) ||
-                e.PropertyName == nameof(MonitorInfo.EnableRotation) ||
-                e.PropertyName == nameof(MonitorInfo.EnableColorTemperature) ||
-                e.PropertyName == nameof(MonitorInfo.EnablePowerState) ||
-                e.PropertyName == nameof(MonitorInfo.DisabledVcpValues) ||
-                e.PropertyName == nameof(MonitorInfo.IsHidden))
-            {
-                SignalSettingsUpdated();
-            }
+            // set_config() does not signal this event. Notify the module only after
+            // the user preference has been saved.
+            SignalSettingsUpdated();
         }
 
         /// <summary>
