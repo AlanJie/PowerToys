@@ -771,53 +771,66 @@ public sealed partial class MainWindow : WindowEx,
     {
         var positionWindowForAnchor = (HWND hwnd) =>
         {
-            PInvoke.GetWindowRect(hwnd, out var bounds);
-            var swpFlags = SET_WINDOW_POS_FLAGS.SWP_NOSIZE | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER | SET_WINDOW_POS_FLAGS.SWP_FRAMECHANGED;
-            switch (anchorCorner)
+            var dpiBeforeMove = PInvoke.GetDpiForWindow(hwnd);
+            PositionWindowAtAnchor(hwnd, anchorInPixels, anchorCorner);
+
+            // Moving across monitors can resize the HWND during WM_DPICHANGED.
+            // Reapply the anchor using the window's new physical size.
+            if (PInvoke.GetDpiForWindow(hwnd) != dpiBeforeMove)
             {
-                case AnchorPoint.TopLeft:
-                    PInvoke.SetWindowPos(
-                        hwnd,
-                        HWND.HWND_TOP,
-                        (int)anchorInPixels.X,
-                        (int)anchorInPixels.Y,
-                        0,
-                        0,
-                        swpFlags);
-                    break;
-                case AnchorPoint.TopRight:
-                    PInvoke.SetWindowPos(
-                        hwnd,
-                        HWND.HWND_TOP,
-                        (int)(anchorInPixels.X - bounds.Width),
-                        (int)anchorInPixels.Y,
-                        0,
-                        0,
-                        swpFlags);
-                    break;
-                case AnchorPoint.BottomLeft:
-                    PInvoke.SetWindowPos(
-                        hwnd,
-                        HWND.HWND_TOP,
-                        (int)anchorInPixels.X,
-                        (int)(anchorInPixels.Y - bounds.Height),
-                        0,
-                        0,
-                        swpFlags);
-                    break;
-                case AnchorPoint.BottomRight:
-                    PInvoke.SetWindowPos(
-                        hwnd,
-                        HWND.HWND_TOP,
-                        (int)(anchorInPixels.X - bounds.Width),
-                        (int)(anchorInPixels.Y - bounds.Height),
-                        0,
-                        0,
-                        swpFlags);
-                    break;
+                PositionWindowAtAnchor(hwnd, anchorInPixels, anchorCorner);
             }
         };
         ShowHwnd(hwndValue, positionWindowForAnchor);
+    }
+
+    private static void PositionWindowAtAnchor(HWND hwnd, Point anchorInPixels, AnchorPoint anchorCorner)
+    {
+        PInvoke.GetWindowRect(hwnd, out var bounds);
+        var swpFlags = SET_WINDOW_POS_FLAGS.SWP_NOSIZE | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER | SET_WINDOW_POS_FLAGS.SWP_FRAMECHANGED;
+        switch (anchorCorner)
+        {
+            case AnchorPoint.TopLeft:
+                PInvoke.SetWindowPos(
+                    hwnd,
+                    HWND.HWND_TOP,
+                    (int)anchorInPixels.X,
+                    (int)anchorInPixels.Y,
+                    0,
+                    0,
+                    swpFlags);
+                break;
+            case AnchorPoint.TopRight:
+                PInvoke.SetWindowPos(
+                    hwnd,
+                    HWND.HWND_TOP,
+                    (int)(anchorInPixels.X - bounds.Width),
+                    (int)anchorInPixels.Y,
+                    0,
+                    0,
+                    swpFlags);
+                break;
+            case AnchorPoint.BottomLeft:
+                PInvoke.SetWindowPos(
+                    hwnd,
+                    HWND.HWND_TOP,
+                    (int)anchorInPixels.X,
+                    (int)(anchorInPixels.Y - bounds.Height),
+                    0,
+                    0,
+                    swpFlags);
+                break;
+            case AnchorPoint.BottomRight:
+                PInvoke.SetWindowPos(
+                    hwnd,
+                    HWND.HWND_TOP,
+                    (int)(anchorInPixels.X - bounds.Width),
+                    (int)(anchorInPixels.Y - bounds.Height),
+                    0,
+                    0,
+                    swpFlags);
+                break;
+        }
     }
 
     private void ShowHwnd(IntPtr hwndValue, Action<HWND>? positionWindow)
