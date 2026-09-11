@@ -120,6 +120,9 @@ public sealed partial class DockControl : UserControl, IRecipient<CloseContextMe
         ViewModel.CenterItems.CollectionChanged -= CenterItems_CollectionChanged;
         ViewModel.CenterItems.CollectionChanged += CenterItems_CollectionChanged;
 
+        // Bands can be populated before Loaded attaches the collection handler.
+        UpdateCenterVisibility();
+
         UpdateEditModeTeachingTip();
     }
 
